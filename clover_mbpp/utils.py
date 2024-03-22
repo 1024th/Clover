@@ -1,5 +1,6 @@
 import os
 import re
+import typing
 
 
 def is_anno(line):
@@ -239,32 +240,46 @@ def merge_spec_and_body(spec, body):
     return "\n".join(ret)
 
 
-def extract_code_from_llm_output(reply):
-    i = reply.find("<answer>")
+def extract_code_by_delim(reply: str, begin: str, end: str) -> typing.Optional[str]:
+    i = reply.find(begin)
     if i != -1:
-        reply = reply[i + 8:]
-        i = reply.find("</answer>")
+        reply = reply[i + len(begin):]
+        i = reply.find(end)
         reply = reply[:i]
         return reply
-    i = reply.find("```dafny")
-    if i != -1:
-        reply = reply[i + 8:]
-        i = reply.find("```")
-        reply = reply[:i]
-        return reply
-    i = reply.find("```Dafny")
-    if i != -1:
-        reply = reply[i + 8:]
-        i = reply.find("```")
-        reply = reply[:i]
-        return reply
-    i = reply.find("```")
-    if i != -1:
-        reply = reply[i + 3:]
-        i = reply.find("```")
-        reply = reply[:i]
-        return reply
+    return None
+
+
+def extract_code(reply: str) -> str:
+    code = extract_code_by_delim(reply, "```dafny", "```")
+    if code is not None:
+        return code
+    code = extract_code_by_delim(reply, "```Dafny", "```")
+    if code is not None:
+        return code
+    code = extract_code_by_delim(reply, "<answer>", "</answer>")
+    if code is not None:
+        return code
+    code = extract_code_by_delim(reply, "```", "```")
+    if code is not None:
+        return code
     return reply
+
+
+def try_correct_dafny_code(code: str) -> str:
+    code = code.replace("function method", "function")
+    code = code.replace("predicate method", "predicate")
+    # remove semicolon at the end of 'requires', 'ensures', 'modifies', 'reads', 'decreases'
+    pattern = re.compile(
+        r"^( *(requires|ensures|modifies|reads|decreases) .+?);$", re.MULTILINE)
+    code = pattern.sub(r"\1", code)
+    return code
+
+
+def extract_code_from_llm_output(reply):
+    code = extract_code(reply)
+    code = try_correct_dafny_code(code)
+    return code
 
 
 def mask_file_names(text: str) -> str:
@@ -297,26 +312,24 @@ def dump_tmp_file(program):
     return tmp_file
 
 
-def run_dafny(program, dafny_path):
+def run_dafny(program, dafny_path) -> str:
     import subprocess
 
     tmp_file = dump_tmp_file(program)
     try:
         s = subprocess.run(
-            f"{dafny_path} verify --verification-time-limit 20 {tmp_file}"
+            f"{dafny_path} verify --verification-time-limit 10 {tmp_file}"
             " --boogie -randomSeedIterations:10",
             shell=True,
             capture_output=True,
             timeout=15,
         )
     except Exception as e:
-        return "", str(e)
-    out = s.stdout.decode().strip()
-    err = s.stderr.decode().strip()
+        return mask_file_names(str(e))
+    out = s.stdout.decode().strip() + s.stderr.decode().strip()
     out = mask_file_names(out)
-    err = mask_file_names(err)
     out = remove_duplicated_error(out)
-    return out, err
+    return out
 
 
 def concat_code(states, attr):
@@ -349,3 +362,5 @@ if __name__ == "__main__":
     out, err = run_dafny(code, "dafny")
     print(out)
     print(err)
+    print(is_dafny_verified(out))
+    print(no_compile_error(out))

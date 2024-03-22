@@ -33,7 +33,7 @@ def ask_llm_equiv_test_doc(s: ProgramState, doc, new_doc, head):
         s += "Below is the signature of the Dafny program:\n" + head + "\n"
         s += "Below is the first docstring:\n" + doc + "\n"
         s += "Below is the second docstring:\n" + new_doc + "\n"
-    s += assistant(gen("doc_equiv"))
+    s += assistant(gen("doc_equiv", max_tokens=256))
     return "YES" in s["doc_equiv"]
 
 
@@ -47,7 +47,7 @@ def gen_body_spec_from_doc(
         name = f"gen_body_spec_try{i}"
         s += assistant(gen(name, max_tokens=1024))
         code = extract_code_from_llm_output(s[name])
-        out, err = run_dafny(code, dafny_path)
+        out = run_dafny(code, dafny_path)
         if no_compile_error(out) and is_dafny_verified(out):
             return code
         with s.user():
@@ -120,13 +120,22 @@ def clover_mbpp(
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--verbose", type=int, default=1)
+    parser.add_argument("--load-path", type=str, default="",
+                        help="Load the previous results json file")
+    parser.add_argument("--save-path", type=str, default="",
+                        help="Save the results json file")
     parser.add_argument("--early-quit", action="store_true")
     parser.add_argument("--dafny-path", type=str, default="dafny")
     parser.add_argument("--feedback-turn", type=int, default=3)
     parser.add_argument("--num-trial", type=int, default=1)
     args = parser.parse_args()
 
-    result_path = "clover_mbpp_results.json"
+    if not args.save_path:
+        args.save_path = "../output/clover_mbpp_dfy50_results.json"
+        args.save_path = os.path.join(
+            os.path.dirname(__file__), args.save_path)
+    print(f"Save path: {args.save_path}")
+    input()
 
     # backend = OpenAI("gpt-3.5-turbo")
     # backend = OpenAI("gpt-4")
@@ -134,8 +143,8 @@ if __name__ == "__main__":
     # set_default_backend(OpenAI("gpt-4"))
 
     dataset = mbpp_dataset.load_dataset()
-    if os.path.exists(result_path):
-        with open(result_path, "r") as f:
+    if args.load_path:
+        with open(args.load_path, "r") as f:
             data = f.read()
         results = Results.model_validate_json(data)
     else:
@@ -143,7 +152,7 @@ if __name__ == "__main__":
 
     sorted_dataset = sorted(dataset.root.items(), key=lambda x: int(x[0]))
     for id, task in sorted_dataset:
-        if id in results.root:
+        if id in results.root and results.root[id].verify_success:
             print(f"Skipping task: {id}")
             continue
         print(f"Processing task: {id}")
@@ -152,5 +161,5 @@ if __name__ == "__main__":
             dafny_path=args.dafny_path,
             feedback_turn=args.feedback_turn, num_trial=args.num_trial, verbose=args.verbose)
         results.root[id] = res
-        with open(result_path, "w") as f:
+        with open(args.save_path, "w") as f:
             f.write(results.model_dump_json(indent=2))
