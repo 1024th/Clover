@@ -240,7 +240,7 @@ def merge_spec_and_body(spec, body):
     return "\n".join(ret)
 
 
-def extract_code_by_delim(reply: str, begin: str, end: str) -> typing.Optional[str]:
+def extract_by_delim(reply: str, begin: str, end: str) -> typing.Optional[str]:
     i = reply.find(begin)
     if i != -1:
         reply = reply[i + len(begin):]
@@ -251,16 +251,16 @@ def extract_code_by_delim(reply: str, begin: str, end: str) -> typing.Optional[s
 
 
 def extract_code(reply: str) -> str:
-    code = extract_code_by_delim(reply, "```dafny", "```")
+    code = extract_by_delim(reply, "```dafny", "```")
     if code is not None:
         return code
-    code = extract_code_by_delim(reply, "```Dafny", "```")
+    code = extract_by_delim(reply, "```Dafny", "```")
     if code is not None:
         return code
-    code = extract_code_by_delim(reply, "<answer>", "</answer>")
+    code = extract_by_delim(reply, "<answer>", "</answer>")
     if code is not None:
         return code
-    code = extract_code_by_delim(reply, "```", "```")
+    code = extract_by_delim(reply, "```", "```")
     if code is not None:
         return code
     return reply
@@ -282,12 +282,42 @@ def extract_code_from_llm_output(reply):
     return code
 
 
+def extract_docstring_from_llm_output(reply):
+    doc = extract_by_delim(reply, '"""', '"""')
+    if doc is not None:
+        return doc.strip()
+    doc = extract_by_delim(reply, '```', '```')
+    if doc is not None:
+        return doc.strip()
+    return reply.strip()
+
+
 def mask_file_names(text: str) -> str:
     # Define a pattern to match file paths
     file_path_pattern = re.compile(r"\b[\w/_/.]+\.dfy\b")
     # Replace all occurrences of file paths with 'foo.dfy'
     masked_text = file_path_pattern.sub("foo.dfy", text)
     return masked_text
+
+
+def mask_method_name(code: str) -> str:
+    # Define a pattern to match method names
+    method_name_pattern = re.compile(r"^method ([a-zA-Z0-9_]+)", re.MULTILINE)
+    # Replace all occurrences of method names with 'foo'
+    masked_text = method_name_pattern.sub("method foo", code)
+    return masked_text
+
+
+def mask_comments(code: str) -> str:
+    comment_pattern = re.compile(r"//.*?$", re.MULTILINE)
+    masked_code = comment_pattern.sub("", code)
+    comment_pattern2 = re.compile(r"/\*(\*(?!/)|[^*])*\*/", re.MULTILINE)
+    masked_code = comment_pattern2.sub("", masked_code)
+    return masked_code
+
+
+def remove_empty_lines(code: str) -> str:
+    return "\n".join([line for line in code.split("\n") if line.strip()])
 
 
 def remove_duplicated_error(msg: str) -> str:
@@ -312,13 +342,13 @@ def dump_tmp_file(program):
     return tmp_file
 
 
-def run_dafny(program, dafny_path) -> str:
+def run_dafny(program) -> str:
     import subprocess
 
     tmp_file = dump_tmp_file(program)
     try:
         s = subprocess.run(
-            f"{dafny_path} verify --verification-time-limit 10 {tmp_file}"
+            f"dafny verify --verification-time-limit 10 {tmp_file}"
             " --boogie -randomSeedIterations:10",
             shell=True,
             capture_output=True,
@@ -357,8 +387,11 @@ def stream_print(s):
 
 
 if __name__ == "__main__":
-    with open("test.dfy", "r") as f:
+    file = os.path.join(os.path.dirname(__file__), "test.dfy")
+    with open(file, "r") as f:
         code = f.read()
+    code = mask_comments(code)
+    print(code)
     out, err = run_dafny(code, "dafny")
     print(out)
     print(err)

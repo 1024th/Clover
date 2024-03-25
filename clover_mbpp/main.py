@@ -15,6 +15,10 @@ from utils import (
     no_compile_error,
     run_dafny,
     stream_print,
+    mask_method_name,
+    mask_comments,
+    remove_empty_lines,
+    extract_docstring_from_llm_output
 )
 
 
@@ -23,6 +27,7 @@ def gen_doc_from_spec(s: ProgramState, spec):
     s += system(prompts.SYS_DAFNY)
     s += user(prompts.GEN_DOC_FROM_SPEC + spec)
     s += assistant(gen("new_doc", max_tokens=512))
+    s["new_doc"] = extract_docstring_from_llm_output(s["new_doc"])
     return s["new_doc"]
 
 
@@ -39,7 +44,7 @@ def ask_llm_equiv_test_doc(s: ProgramState, doc, new_doc, head):
 
 @sglang.function
 def gen_body_spec_from_doc(
-    s: ProgramState, doc: str, method_signature: str, dafny_path, feedback_turn=3
+    s: ProgramState, doc: str, method_signature: str, feedback_turn=3
 ):
     s += system(prompts.SYS_DAFNY)
     s += user(prompts.GEN_BODY_SPEC_FROM_DOC + doc + "\n" + method_signature)
@@ -47,7 +52,7 @@ def gen_body_spec_from_doc(
         name = f"gen_body_spec_try{i}"
         s += assistant(gen(name, max_tokens=1024))
         code = extract_code_from_llm_output(s[name])
-        out = run_dafny(code, dafny_path)
+        out = run_dafny(code)
         if no_compile_error(out) and is_dafny_verified(out):
             return code
         with s.user():
@@ -68,51 +73,60 @@ class Results(pydantic.RootModel):
 
 
 def clover_mbpp(
-    docstring: str,
-    signature: str,
-    dafny_path: str,
+    task: mbpp_dataset.Task,
+    old_results: typing.Optional[Result] = None,
     feedback_turn=3,
     num_trial=1,
+    run_generation=True,
+    run_reconstruction=True,
     verbose=0,
 ) -> Result:
-    res = Result(verify_success=False, reconstruct_success=False)
+    docstring = task.task_description
+    signature = task.specification.method_signature
+    if old_results:
+        res = old_results
+    else:
+        res = Result(verify_success=False, reconstruct_success=False)
 
     # Doc -> spec + code
-    s = gen_body_spec_from_doc(
-        docstring, signature, dafny_path, feedback_turn=feedback_turn,
-        stream=(verbose >= 2)
-    )
-    if verbose >= 2:
-        stream_print(s)
-    res.code = str(s.ret_value)
-    res.trace += s.messages()
-    res.verify_success = bool(res.code)
-    if not res.verify_success:
-        return res
-
-    # Spec -> doc reconstruction
-    spec = extract_spec(res.code)
-    if verbose >= 1:
-        print(f"spec: {spec}")
-    for k in range(num_trial):
-        s = gen_doc_from_spec(spec, stream=(verbose >= 2))
-        if verbose >= 2:
-            stream_print(s)
-        new_doc = str(s.ret_value)
-        res.trace += s.messages()
-        s = ask_llm_equiv_test_doc.run(
-            docstring, new_doc, signature, stream=(verbose >= 2)
+    if run_generation:
+        s = gen_body_spec_from_doc(
+            docstring, signature, feedback_turn=feedback_turn,
+            stream=(verbose >= 2)
         )
         if verbose >= 2:
             stream_print(s)
-        res.reconstruct_success = bool(s.ret_value)
+        res.code = str(s.ret_value)
         res.trace += s.messages()
-        if res.reconstruct_success:
-            break
+        res.verify_success = bool(res.code)
+        if not res.verify_success:
+            return res
+
+    # Spec -> doc reconstruction
+    if run_reconstruction:
+        spec = extract_spec(res.code)
+        spec = remove_empty_lines(mask_method_name(mask_comments(spec)))
         if verbose >= 1:
-            print(f"Reconstruction failed for trial {k}")
-    if not res.reconstruct_success:
-        return res
+            print(f"spec: {spec}")
+        for k in range(num_trial):
+            s = gen_doc_from_spec(spec, stream=(verbose >= 2))
+            if verbose >= 2:
+                stream_print(s)
+            new_doc = str(s.ret_value)
+            res.trace += s.messages()
+            s = ask_llm_equiv_test_doc.run(
+                docstring, new_doc, signature, stream=(verbose >= 2)
+            )
+            if verbose >= 2:
+                stream_print(s)
+            res.reconstruct_success = bool(s.ret_value)
+            res.trace += s.messages()
+            if res.reconstruct_success:
+                break
+            if verbose >= 1:
+                print(f"Reconstruction failed for trial {k}")
+        if not res.reconstruct_success:
+            return res
 
     return res
 
@@ -126,6 +140,7 @@ if __name__ == "__main__":
                         help="Save the results json file")
     parser.add_argument("--early-quit", action="store_true")
     parser.add_argument("--dafny-path", type=str, default="dafny")
+    parser.add_argument("--reconstruction-only", type=bool, default=False)
     parser.add_argument("--feedback-turn", type=int, default=3)
     parser.add_argument("--num-trial", type=int, default=1)
     args = parser.parse_args()
@@ -152,14 +167,21 @@ if __name__ == "__main__":
 
     sorted_dataset = sorted(dataset.root.items(), key=lambda x: int(x[0]))
     for id, task in sorted_dataset:
-        if id in results.root and results.root[id].verify_success:
-            print(f"Skipping task: {id}")
-            continue
+        if args.reconstruction_only:
+            if id not in results.root or not results.root[id].verify_success:
+                print(f"Skipping task: {id}")
+                continue
+        else:
+            if id in results.root and results.root[id].verify_success:
+                print(f"Skipping task: {id}")
+                continue
         print(f"Processing task: {id}")
         res = clover_mbpp(
-            docstring=task.task_description, signature=task.specification.method_signature,
-            dafny_path=args.dafny_path,
-            feedback_turn=args.feedback_turn, num_trial=args.num_trial, verbose=args.verbose)
+            task=task,
+            old_results=results.root.get(id),
+            feedback_turn=args.feedback_turn, num_trial=args.num_trial,
+            run_generation=not args.reconstruction_only,
+            verbose=args.verbose)
         results.root[id] = res
         with open(args.save_path, "w") as f:
             f.write(results.model_dump_json(indent=2))

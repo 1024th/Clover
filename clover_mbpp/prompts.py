@@ -179,6 +179,10 @@ Below is the docstring and the function signature:\n"
 
 GEN_DOC_FROM_SPEC = "Given the function signature and its specifications for a Dafny program. \
 Please return a short and concise docstring of the functional behavior implied by the specifications. \
+The specifications are the 'requires', 'ensures', and 'modifies' clauses. \
+The hints from method name and variable names should not be considered as part of the specification. \
+Return 'No specifications' if no specifications are found. \
+Do not add any additional information that is not in the specifications. \
 Do not mention implementation details. \
 Please only return the docstring. Do not explain. \
 Below is the Dafny signature and its specifications:\n"
@@ -190,7 +194,9 @@ Do not return the docstring and the function implementation. Do not use helper f
 Do not explain. \
 Below is the docstring and function signature:\n"
 
-DOC_EQUIV = "Determine if two docstrings describe the same functional behavior of a dafny program. \
+DOC_EQUIV = "Determine if two docstrings describe the same functional behavior of a dafny program \
+and the second docstring contains all the information in the first docstring. \
+Leaving out any information from the first docstring is considered a mismatch. \
 Return YES or NO, and then explain the reason.\n"
 
 
