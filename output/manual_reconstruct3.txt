@@ -1,0 +1,45 @@
+62
+FindSmallest
+not strong enough
+
+101 (fixed in 5)
+KthElement
+missing info but passed
+
+227
+MinOfThree
+not strong enough
+
+267
+SumOfSquaresOfFirstNOddNumbers
+correct but not passed; math calculation
+
+566 (fixed in 5)
+SumOfDigits
+missing info but passed
+
+770
+SumOfFourthPowerOfOddNumbers
+correct but not passed; predicate in spec
+
+807
+FindFirstOdd
+missing info but passed; 'first'
+
+---
+
+ambiguous
+
+58
+HasOppositeSign
+what if ==0?
+
+632
+MoveZeroesToEnd
+other elems?
+
+760
+HasOnlyOneDistinctElement
+empty array?
+
+764
